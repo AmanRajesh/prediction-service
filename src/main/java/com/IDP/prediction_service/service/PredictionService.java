@@ -236,8 +236,16 @@ public class PredictionService {
                 });
     }
     public Mono<Void> cleanUpHistory(String sessionId) {
+        Disposable pendingTask = pendingPredictions.remove(sessionId);
+        if (pendingTask != null) {
+            pendingTask.dispose();
+            System.out.println("🛑 [CANCELLED] Journey ended early. Aborted Postgres write for: " + sessionId);
+        }
+
+        // 2. Clean up the database (just in case the timer already finished earlier)
         return postgresRepo.deleteBySessionId(sessionId)
-                .doOnSuccess(v -> System.out.println("🗑️ SQL Cleared for session: " + sessionId))
-                .doOnError(e -> System.err.println("❌ SQL Cleanup Failed: " + e.getMessage()));
+                .doOnNext(count -> System.out.println("🗑️ SQL Cleanup complete for " + sessionId + " (Rows deleted: " + count + ")"))
+                .doOnError(e -> System.err.println("❌ SQL Cleanup Failed: " + e.getMessage()))
+                .then(); // Convert back to Mono<Void> to satisfy the method signature
     }
 }

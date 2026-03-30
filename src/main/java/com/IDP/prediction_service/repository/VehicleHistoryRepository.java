@@ -12,7 +12,7 @@ public interface VehicleHistoryRepository extends ReactiveCrudRepository<Vehicle
     @Query("SELECT * FROM vehicle_history WHERE session_id = :sessionId ORDER BY id DESC LIMIT 1")
     Mono<VehicleHistoryEntity> findBySessionId(String sessionId);
 
-    @Modifying
-    @Query("DELETE FROM vehicle_history WHERE session_id = :sessionId")
+
+
     Mono<Void> deleteBySessionId(String sessionId);
 }
