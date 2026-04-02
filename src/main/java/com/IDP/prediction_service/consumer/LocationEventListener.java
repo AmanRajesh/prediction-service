@@ -16,18 +16,18 @@ public class LocationEventListener {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = "prediction-events", groupId = "prediction-service-group")
-    public void onSignalLost(String sessionId) {
-        System.out.println("📩 Kafka: Signal lost for " + sessionId);
-
-        // Just trigger the service and subscribe
-        predictionService.startGhostFromHistory(sessionId)
-                .subscribe(
-                        null,
-                        err -> System.err.println("❌ Service Error: " + err.getMessage()),
-                        () -> System.out.println("✅ Service: Ghost initialized for " + sessionId)
-                );
-    }
+//    @KafkaListener(topics = "prediction-events", groupId = "prediction-service-group")
+//    public void onSignalLost(String sessionId) {
+//        System.out.println("📩 Kafka: Signal lost for " + sessionId);
+//
+//        // Just trigger the service and subscribe
+//        predictionService.startGhostFromHistory(sessionId)
+//                .subscribe(
+//                        null,
+//                        err -> System.err.println("❌ Service Error: " + err.getMessage()),
+//                        () -> System.out.println("✅ Service: Ghost initialized for " + sessionId)
+//                );
+//    }
 
     @KafkaListener(topics = "journey-events", groupId = "prediction-service-group")
     public void onJourneyEnded(String message) { // Rename to 'message'

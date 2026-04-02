@@ -50,45 +50,64 @@ public class PredictionService {
                         return Mono.empty();
                     }
 
-                    // --- CALCULATION LOGIC ---
-                    VehicleLocation newest = event.trail().get(0);
-                    VehicleLocation older = event.trail().get(1);
-
-                    // 1. Calculate the physics data
-                    double distanceMeters = GeoCalculator.calculateDistance(older.latitude(), older.longitude(), newest.latitude(), newest.longitude());
-                    double speedMps = distanceMeters / ASSUMED_PING_INTERVAL_SEC;
-                    double bearing = GeoCalculator.calculateBearing(older.latitude(), older.longitude(), newest.latitude(), newest.longitude());
-
-                    // 2. Decide the starting point: Anchor for the frontend
-                    Point lastKnownPoint = new Point(newest.longitude(), newest.latitude());
-
-                    // 3. Create the enriched member string for Redis (type:sessionId:speed:bearing)
-                    String memberValue = event.lastSeen().vehicleType() + ":" + sessionId + ":" + speedMps + ":" + bearing;
-
-                    // --- PERSISTENCE LOGIC ---
-                    String trailJson = "[]";
                     try {
-                        trailJson = objectMapper.writeValueAsString(event.trail());
+                        // 🚨 THE BULLETPROOF FIX: Read the data as raw Maps instead of Java Records!
+                        // This prevents Jackson from silently zeroing out your latitude and longitude.
+                        List<Map<String, Object>> safeTrail = objectMapper.convertValue(
+                                event.trail(),
+                                new TypeReference<List<Map<String, Object>>>() {}
+                        );
+
+                        Map<String, Object> newest = safeTrail.get(0);
+                        Map<String, Object> older = safeTrail.get(1);
+
+                        // Safely extract the exact numbers directly from the JSON
+                        double newestLat = Double.parseDouble(String.valueOf(newest.get("latitude")));
+                        double newestLon = Double.parseDouble(String.valueOf(newest.get("longitude")));
+                        double olderLat = Double.parseDouble(String.valueOf(older.get("latitude")));
+                        double olderLon = Double.parseDouble(String.valueOf(older.get("longitude")));
+                        String vType = String.valueOf(newest.get("vehicleType"));
+
+                        // DEBUG: This will prove your coordinates are real!
+                        System.out.println("🔍 RAW COORDS -> Newest: " + newestLat + ", " + newestLon + " | Older: " + olderLat + ", " + olderLon);
+
+                        // 1. Calculate the physics data
+                        double distanceMeters = GeoCalculator.calculateDistance(olderLat, olderLon, newestLat, newestLon);
+                        double speedMps = distanceMeters / ASSUMED_PING_INTERVAL_SEC;
+                        double bearing = GeoCalculator.calculateBearing(olderLat, olderLon, newestLat, newestLon);
+
+                        System.out.println("🧮 GHOST MATH -> Speed: " + speedMps + " | Bearing: " + bearing);
+
+                        // 2. Decide the starting point
+                        Point lastKnownPoint = new Point(newestLon, newestLat);
+
+                        // 3. Create the enriched member string for Redis
+                        String memberValue = vType + ":" + sessionId + ":" + speedMps + ":" + bearing;
+
+                        // --- PERSISTENCE LOGIC ---
+                        String trailJson = objectMapper.writeValueAsString(safeTrail);
+
+                        VehicleHistoryEntity historyLog = new VehicleHistoryEntity(
+                                sessionId,
+                                vType,
+                                event.eventType(),
+                                newestLat,
+                                newestLon,
+                                trailJson
+                        );
+
+                        Mono<Long> saveToRedis = redisTemplate.opsForGeo().add(PREDICTED_GEO_KEY, lastKnownPoint, memberValue)
+                                .doOnSuccess(res -> System.out.println("📍 Ghost metadata saved to Redis for " + sessionId));
+
+                        Mono<VehicleHistoryEntity> saveToPostgres = postgresRepo.save(historyLog)
+                                .doOnSuccess(res -> System.out.println("💾 Signal Lost permanently recorded in Postgres for " + sessionId));
+
+                        return saveToRedis.then(saveToPostgres);
+
                     } catch (Exception e) {
-                        System.err.println("Could not parse trail to JSON");
+                        System.err.println("❌ Critical Math/Parsing Error: " + e.getMessage());
+                        return Mono.empty();
                     }
-
-                    VehicleHistoryEntity historyLog = new VehicleHistoryEntity(
-                            sessionId,
-                            event.lastSeen().vehicleType(),
-                            event.eventType(),
-                            event.lastSeen().latitude(),
-                            event.lastSeen().longitude(),
-                            trailJson
-                    );
-
-                    Mono<Long> saveToRedis = redisTemplate.opsForGeo().add(PREDICTED_GEO_KEY, lastKnownPoint, memberValue)
-                            .doOnSuccess(res -> System.out.println("📍 Ghost metadata saved to Redis for " + sessionId));
-
-                    Mono<VehicleHistoryEntity> saveToPostgres = postgresRepo.save(historyLog)
-                            .doOnSuccess(res -> System.out.println("💾 Signal Lost permanently recorded in Postgres for " + sessionId));
-
-                    return saveToRedis.then(saveToPostgres);
                 })
                 .doFinally(signalType -> pendingPredictions.remove(sessionId))
                 .subscribe(
